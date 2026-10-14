@@ -97,7 +97,8 @@ function neutralizeDocument(value: DocumentType): DocumentType {
   return rewriteDocument(value, neutralizeHarmonyControlTokens);
 }
 
-const SCHEMA_TEXT_KEYS = new Set(['description', 'title']);
+/** Schema annotations that carry prose and take no part in validation. */
+const SCHEMA_TEXT_KEYS = new Set(['description', 'title', '$comment']);
 
 /**
  * A tool's input schema is a contract the model's arguments must satisfy, so only its prose

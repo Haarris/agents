@@ -80,6 +80,7 @@ describe('neutralizeHarmonyToolConfig', () => {
             json: {
               type: 'object',
               title: '<|channel|> docs',
+              $comment: `See ${ANALYSIS_HEADER}`,
               properties: {
                 '<|channel|>': {
                   type: 'string',
@@ -107,6 +108,7 @@ describe('neutralizeHarmonyToolConfig', () => {
           json: {
             type: 'object',
             title: '<｜channel｜> docs',
+            $comment: `See ${NEUTRALIZED_HEADER}`,
             properties: {
               '<|channel|>': {
                 type: 'string',
