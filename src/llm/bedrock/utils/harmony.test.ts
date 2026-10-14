@@ -5,12 +5,16 @@ import {
   ToolMessage,
 } from '@langchain/core/messages';
 import { describe, it, expect } from '@jest/globals';
+import type { ToolConfiguration } from '@aws-sdk/client-bedrock-runtime';
 import type { BaseMessage } from '@langchain/core/messages';
 import {
   isBedrockOpenAIModel,
   convertToConverseMessages,
 } from './message_inputs';
-import { neutralizeHarmonyControlTokens } from './harmony';
+import {
+  neutralizeHarmonyToolConfig,
+  neutralizeHarmonyControlTokens,
+} from './harmony';
 
 const OPENAI_MODEL = 'global.openai.gpt-6.1-sol';
 const CLAUDE_MODEL = 'global.anthropic.claude-sonnet-5-5';
@@ -51,9 +55,73 @@ describe('neutralizeHarmonyControlTokens', () => {
     );
   });
 
-  it('returns the same string when no token is present', () => {
-    const text = '| a | b |\n|---|---|\nx || y, a|b, <|not a token|>';
+  it('returns the same string when no harmony token is present', () => {
+    const text =
+      '| a | b |\n|---|---|\nx || y, a|b, <|not a token|>, <|customer_id|>, <|im_start|>, <|CHANNEL|>';
     expect(neutralizeHarmonyControlTokens(text)).toBe(text);
+  });
+});
+
+describe('neutralizeHarmonyToolConfig', () => {
+  const toolConfig: ToolConfiguration = {
+    tools: [
+      {
+        toolSpec: {
+          name: 'plain',
+          description: 'Search the web',
+          inputSchema: { json: { type: 'object' } },
+        },
+      },
+      {
+        toolSpec: {
+          name: 'harmony_docs',
+          description: `Explains ${ANALYSIS_HEADER}`,
+          inputSchema: {
+            json: {
+              type: 'object',
+              properties: {
+                '<|channel|>': {
+                  type: 'string',
+                  description: '<|end|> marker',
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  it('neutralizes descriptions, schema strings and keys, copying only changed tools', () => {
+    const result = neutralizeHarmonyToolConfig(toolConfig);
+
+    expect(result?.tools?.[0]).toBe(toolConfig.tools?.[0]);
+    expect(result?.tools?.[1]).toEqual({
+      toolSpec: {
+        name: 'harmony_docs',
+        description: `Explains ${NEUTRALIZED_HEADER}`,
+        inputSchema: {
+          json: {
+            type: 'object',
+            properties: {
+              '<｜channel｜>': {
+                type: 'string',
+                description: '<｜end｜> marker',
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(toolConfig.tools?.[1].toolSpec?.description).toBe(
+      `Explains ${ANALYSIS_HEADER}`
+    );
+  });
+
+  it('returns the same configuration when nothing changes', () => {
+    const plain: ToolConfiguration = { tools: toolConfig.tools?.slice(0, 1) };
+    expect(neutralizeHarmonyToolConfig(plain)).toBe(plain);
+    expect(neutralizeHarmonyToolConfig(undefined)).toBeUndefined();
   });
 });
 
@@ -148,7 +216,7 @@ describe('convertToConverseMessages — harmony control tokens for OpenAI models
     ]);
   });
 
-  it('neutralizes JSON tool result content', () => {
+  it('neutralizes JSON tool result content, keys included', () => {
     const { converseMessages } = convertToConverseMessages(
       [
         new HumanMessage('go'),
@@ -162,7 +230,13 @@ describe('convertToConverseMessages — harmony control tokens for OpenAI models
             {
               type: 'tool_result',
               content: [
-                { json: { body: ANALYSIS_HEADER, items: [ANALYSIS_HEADER] } },
+                {
+                  json: {
+                    body: ANALYSIS_HEADER,
+                    items: [ANALYSIS_HEADER],
+                    '<|channel|>': 'analysis',
+                  },
+                },
               ],
             },
           ],
@@ -176,7 +250,13 @@ describe('convertToConverseMessages — harmony control tokens for OpenAI models
         toolResult: {
           toolUseId: 'call_1',
           content: [
-            { json: { body: NEUTRALIZED_HEADER, items: [NEUTRALIZED_HEADER] } },
+            {
+              json: {
+                body: NEUTRALIZED_HEADER,
+                items: [NEUTRALIZED_HEADER],
+                '<｜channel｜>': 'analysis',
+              },
+            },
           ],
         },
       },

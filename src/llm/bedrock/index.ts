@@ -25,6 +25,7 @@ import { ChatBedrockConverse } from '@langchain/aws';
 import { AIMessageChunk } from '@langchain/core/messages';
 import { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 import {
+  ConverseCommand,
   ConverseStreamCommand,
   type ConverseStreamOutput,
   type GuardrailConfiguration,
@@ -38,6 +39,7 @@ import type { ContentBlockDeltaEvent } from './types';
 import {
   convertToConverseMessages,
   createConverseToolUseStopChunk,
+  convertConverseMessageToLangChainMessage,
   handleConverseStreamContentBlockStart,
   handleConverseStreamContentBlockDelta,
   handleConverseStreamMetadata,
@@ -51,6 +53,8 @@ import { smoothStream, resolveStreamDelay, isSignalAborted } from '@/llm/stream/
 import { linkStreamLimitCanonical } from '@/llm/streamLimits';
 import { applyCachePointsToConversePayload } from './cachePoints';
 import { insertBedrockToolCachePoint } from './toolCache';
+import { isBedrockOpenAIModel } from './utils/message_inputs';
+import { neutralizeHarmonyToolConfig } from './utils/harmony';
 
 /**
  * A `200 OK` ConverseStream whose event stream closes before a single event: no
@@ -224,14 +228,17 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
     serviceTier?: { type: ServiceTierType };
   } {
     const baseParams = super.invocationParams(options);
+    const baseToolConfig = isBedrockOpenAIModel(this.model)
+      ? neutralizeHarmonyToolConfig(baseParams.toolConfig)
+      : baseParams.toolConfig;
     const toolConfig =
       this.promptCache === true && supportsBedrockToolCache(this.cacheModelId)
         ? insertBedrockToolCachePoint(
-          baseParams.toolConfig,
+          baseToolConfig,
           true,
           resolveBedrockPromptCacheTtl(this.promptCacheTtl, this.cacheModelId)
         )
-        : baseParams.toolConfig;
+        : baseToolConfig;
 
     /** Service tier from options or fall back to class-level setting */
     const serviceTierType = options?.serviceTier ?? this.serviceTier;
@@ -252,6 +259,9 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
     options: this['ParsedCallOptions'] & CustomChatBedrockConverseCallOptions,
     runManager?: CallbackManagerForLLMRun
   ): Promise<ChatResult> {
+    if (isBedrockOpenAIModel(this.model)) {
+      return this.generateWithLocalConverter(messages, options);
+    }
     const originalModel = this.model;
     if (
       this.applicationInferenceProfile != null &&
@@ -265,6 +275,55 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
     } finally {
       this.model = originalModel;
     }
+  }
+
+  /**
+   * Non-streaming Converse through this package's converter, as the stream already uses.
+   * The parent's converter replays reasoning and sends harmony control tokens as written,
+   * both of which OpenAI models on Bedrock fail on.
+   */
+  private async generateWithLocalConverter(
+    messages: BaseMessage[],
+    options: this['ParsedCallOptions'] & CustomChatBedrockConverseCallOptions
+  ): Promise<ChatResult> {
+    const { converseMessages, converseSystem } = convertToConverseMessages(
+      messages,
+      { model: this.model }
+    );
+    const params = this.invocationParams(options);
+    const modelId = this.getModelId();
+    applyCachePointsToConversePayload({
+      cacheControl: options.cache_control,
+      system: converseSystem,
+      messages: converseMessages,
+      params,
+      modelId,
+    });
+    const { output, ...responseMetadata } = await this.client.send(
+      new ConverseCommand({
+        modelId,
+        messages: converseMessages,
+        ...(converseSystem.length > 0 ? { system: converseSystem } : {}),
+        requestMetadata: options.requestMetadata,
+        ...(params as Record<string, unknown>),
+      }),
+      { abortSignal: options.signal }
+    );
+    if (output?.message == null) {
+      throw new Error('No message found in Bedrock response.');
+    }
+    const message = convertConverseMessageToLangChainMessage(
+      output.message,
+      responseMetadata
+    );
+    return {
+      generations: [
+        {
+          text: typeof message.content === 'string' ? message.content : '',
+          message,
+        },
+      ],
+    };
   }
 
   /**
