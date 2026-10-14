@@ -53,6 +53,15 @@ import { applyCachePointsToConversePayload } from './cachePoints';
 import { insertBedrockToolCachePoint } from './toolCache';
 
 /**
+ * A `200 OK` ConverseStream whose event stream closes before a single event: no
+ * `messageStart`, no `messageStop`, no exception event. OpenAI models do this for a
+ * request their chat template cannot render (see `./utils/harmony`). Surfaced as an error
+ * so the turn fails with this explanation instead of resolving to no message at all.
+ */
+export const BEDROCK_EMPTY_STREAM_MESSAGE =
+  'Amazon Bedrock ended the response stream without sending any events. The model could not process this request; it may contain text the model rejects.';
+
+/**
  * Service tier type for Bedrock invocations.
  * Requires AWS SDK >= 3.966.0 to actually work.
  * @see https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
@@ -313,8 +322,10 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
       const stream: AsyncIterable<ConverseStreamOutput> | undefined =
         response.stream;
       if (!stream) {
-        return;
+        throw new Error(BEDROCK_EMPTY_STREAM_MESSAGE);
       }
+      const isStreamAborted = (): boolean =>
+        streamAbortController.signal.aborted;
 
       const seenBlockIndices = new Set<number>();
       const toolUseBlockIndices = new Set<number>();
@@ -387,7 +398,9 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
       const source = (async function* (): AsyncGenerator<
         SmoothItem<BedrockEmittedChunk>
         > {
+        let sawEvent = false;
         for await (const event of stream) {
+          sawEvent = true;
           if (event.contentBlockStart != null) {
             const startChunk = handleConverseStreamContentBlockStart(
               event.contentBlockStart
@@ -499,6 +512,9 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
               emit: (): BedrockEmittedChunk => ({ chunk: eventChunk, callbackToken: '' }),
             };
           }
+        }
+        if (!sawEvent && !isStreamAborted()) {
+          throw new Error(BEDROCK_EMPTY_STREAM_MESSAGE);
         }
       })();
 
