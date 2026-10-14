@@ -53,17 +53,23 @@ export function neutralizeHarmonyControlTokens(text: string): string {
 }
 
 /**
- * A JSON document with every string, object keys included, neutralized; the same reference
- * when nothing changed.
+ * A JSON document with `rewrite` applied to its string values, given the key each one sits
+ * under (an array item inherits its array's key); the same reference when nothing changed.
+ * Keys are never rewritten: they are structure (argument and property names), and rewriting
+ * them could merge two keys or rename an argument the tool expects.
  */
-function neutralizeDocument(value: DocumentType): DocumentType {
+function rewriteDocument(
+  value: DocumentType,
+  rewrite: (text: string, key: string | undefined) => string,
+  key?: string
+): DocumentType {
   if (typeof value === 'string') {
-    return neutralizeHarmonyControlTokens(value);
+    return rewrite(value, key);
   }
   if (Array.isArray(value)) {
     let next: DocumentType[] | undefined;
     for (let i = 0; i < value.length; i++) {
-      const item = neutralizeDocument(value[i]);
+      const item = rewriteDocument(value[i], rewrite, key);
       if (item !== value[i]) {
         next ??= value.slice();
         next[i] = item;
@@ -74,21 +80,36 @@ function neutralizeDocument(value: DocumentType): DocumentType {
   if (value == null || typeof value !== 'object') {
     return value;
   }
-  const keys = Object.keys(value);
-  let entries: [string, DocumentType][] | undefined;
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
-    const entry = value[key];
-    const nextKey = neutralizeHarmonyControlTokens(key);
-    const nextEntry = neutralizeDocument(entry);
-    if (entries == null && (nextKey !== key || nextEntry !== entry)) {
-      entries = keys
-        .slice(0, i)
-        .map((previous): [string, DocumentType] => [previous, value[previous]]);
+  let next: Record<string, DocumentType> | undefined;
+  for (const entryKey of Object.keys(value)) {
+    const entry = value[entryKey];
+    const item = rewriteDocument(entry, rewrite, entryKey);
+    if (item !== entry) {
+      next ??= { ...value };
+      next[entryKey] = item;
     }
-    entries?.push([nextKey, nextEntry]);
   }
-  return entries == null ? value : Object.fromEntries(entries);
+  return next ?? value;
+}
+
+/** Tool inputs and results replayed as history: every string value is free text. */
+function neutralizeDocument(value: DocumentType): DocumentType {
+  return rewriteDocument(value, neutralizeHarmonyControlTokens);
+}
+
+const SCHEMA_TEXT_KEYS = new Set(['description', 'title']);
+
+/**
+ * A tool's input schema is a contract the model's arguments must satisfy, so only its prose
+ * is neutralized. Names, `enum`/`const` values, defaults and patterns are sent as written:
+ * rewriting them would have the model produce values the bound tool does not accept.
+ */
+function neutralizeSchema(value: DocumentType): DocumentType {
+  return rewriteDocument(value, (text, key) =>
+    key != null && SCHEMA_TEXT_KEYS.has(key)
+      ? neutralizeHarmonyControlTokens(text)
+      : text
+  );
 }
 
 function neutralizeToolResultBlock(
@@ -165,7 +186,7 @@ function neutralizeTool(tool: ToolEntry): ToolEntry {
       ? spec.description
       : neutralizeHarmonyControlTokens(spec.description);
   const schema = spec.inputSchema?.json;
-  const json = schema === undefined ? schema : neutralizeDocument(schema);
+  const json = schema === undefined ? schema : neutralizeSchema(schema);
   if (description === spec.description && json === schema) {
     return tool;
   }
@@ -180,8 +201,8 @@ function neutralizeTool(tool: ToolEntry): ToolEntry {
 }
 
 /**
- * Tool descriptions and schemas are rendered into the same prompt as messages, so a tool that
- * documents the format carries the same failure. Returns the same configuration when no tool
+ * Tool descriptions and schema prose are rendered into the same prompt as messages, so a tool
+ * that documents the format carries the same failure. Returns the same configuration when no tool
  * changed; a changed tool is copied, leaving the bound tools untouched.
  */
 export function neutralizeHarmonyToolConfig(

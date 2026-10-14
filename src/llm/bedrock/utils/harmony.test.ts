@@ -79,10 +79,13 @@ describe('neutralizeHarmonyToolConfig', () => {
           inputSchema: {
             json: {
               type: 'object',
+              title: '<|channel|> docs',
               properties: {
                 '<|channel|>': {
                   type: 'string',
                   description: '<|end|> marker',
+                  enum: ['<|end|>', '<|return|>'],
+                  default: '<|end|>',
                 },
               },
             },
@@ -92,7 +95,7 @@ describe('neutralizeHarmonyToolConfig', () => {
     ],
   };
 
-  it('neutralizes descriptions, schema strings and keys, copying only changed tools', () => {
+  it('neutralizes descriptions and schema prose only, copying only changed tools', () => {
     const result = neutralizeHarmonyToolConfig(toolConfig);
 
     expect(result?.tools?.[0]).toBe(toolConfig.tools?.[0]);
@@ -103,10 +106,13 @@ describe('neutralizeHarmonyToolConfig', () => {
         inputSchema: {
           json: {
             type: 'object',
+            title: '<｜channel｜> docs',
             properties: {
-              '<｜channel｜>': {
+              '<|channel|>': {
                 type: 'string',
                 description: '<｜end｜> marker',
+                enum: ['<|end|>', '<|return|>'],
+                default: '<|end|>',
               },
             },
           },
@@ -216,7 +222,7 @@ describe('convertToConverseMessages — harmony control tokens for OpenAI models
     ]);
   });
 
-  it('neutralizes JSON tool result content, keys included', () => {
+  it('neutralizes JSON tool result values, leaving keys as written', () => {
     const { converseMessages } = convertToConverseMessages(
       [
         new HumanMessage('go'),
@@ -254,7 +260,7 @@ describe('convertToConverseMessages — harmony control tokens for OpenAI models
               json: {
                 body: NEUTRALIZED_HEADER,
                 items: [NEUTRALIZED_HEADER],
-                '<｜channel｜>': 'analysis',
+                '<|channel|>': 'analysis',
               },
             },
           ],

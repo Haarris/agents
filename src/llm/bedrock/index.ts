@@ -213,10 +213,13 @@ export class CustomChatBedrockConverse extends ChatBedrockConverse {
 
   /**
    * Get the model ID to use for API calls.
-   * Returns applicationInferenceProfile if set, otherwise returns this.model.
+   * Returns applicationInferenceProfile if set and non-empty, otherwise returns this.model.
    */
   protected getModelId(): string {
-    return this.applicationInferenceProfile ?? this.model;
+    return this.applicationInferenceProfile != null &&
+      this.applicationInferenceProfile !== ''
+      ? this.applicationInferenceProfile
+      : this.model;
   }
 
   /**

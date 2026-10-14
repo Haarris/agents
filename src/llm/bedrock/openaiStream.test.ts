@@ -185,6 +185,24 @@ describe('Bedrock OpenAI model without streaming', () => {
   });
 });
 
+describe('Bedrock OpenAI model without streaming, empty application profile', () => {
+  it('falls back to the model id', async () => {
+    const { model, send } = createModel([]);
+    model.applicationInferenceProfile = '';
+    send.mockImplementation(async () => ({
+      output: { message: { role: 'assistant', content: [{ text: 'ok' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      metrics: { latencyMs: 0 },
+    }));
+
+    await model.invoke([new HumanMessage('hi')]);
+
+    const command = send.mock.calls[0][0] as unknown as ConverseCommand;
+    expect(command.input.modelId).toBe(OPENAI_MODEL);
+  });
+});
+
 describe('collectAttemptToolCalls', () => {
   it('reports a missing message as an empty response, not a TypeError', () => {
     expect(() => collectAttemptToolCalls([undefined])).toThrow(
