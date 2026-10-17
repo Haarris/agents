@@ -147,6 +147,14 @@ describe('rejectsModelTurnPrefill', () => {
     expect(rejectsModelTurnPrefill('google/gemini-3.8-flash-lite')).toBe(true);
   });
 
+  test('covers Gemini 4 Argon and its variants', () => {
+    expect(rejectsModelTurnPrefill('gemini-4-argon')).toBe(true);
+    expect(rejectsModelTurnPrefill('models/gemini-4-argon')).toBe(true);
+    expect(rejectsModelTurnPrefill('gemini-4-argon-cyber-permissive')).toBe(
+      true
+    );
+  });
+
   test('splits the 3.5 generation, where only Flash-Lite rejects prefill', () => {
     expect(rejectsModelTurnPrefill('gemini-3.5-flash')).toBe(false);
     expect(rejectsModelTurnPrefill('gemini-3.5-flash-latest')).toBe(false);

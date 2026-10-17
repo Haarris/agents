@@ -681,12 +681,17 @@ const NO_PREFILL_FLASH_MIN_VERSION = { major: 3, minor: 6 } as const;
 const GEMINI_FLASH_VERSION_PATTERN = /^gemini-(\d+)(?:\.(\d+))?-flash(?:$|-)/;
 
 /**
- * Models that reject prefill despite predating
- * {@link NO_PREFILL_FLASH_MIN_VERSION}. Gemini 3.5 Flash-Lite enforces the
+ * Models that reject prefill outside the Flash version cutoff
+ * ({@link NO_PREFILL_FLASH_MIN_VERSION}). Gemini 3.5 Flash-Lite enforces the
  * restriction while its sibling Gemini 3.5 Flash still accepts a trailing model
- * turn, so the 3.5 generation cannot be expressed as a version cutoff.
+ * turn, so the 3.5 generation cannot be expressed as a version cutoff. Gemini 4
+ * Argon is not a Flash model; its histories cannot end in a `model` turn.
+ * @see https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon
  */
-const NO_PREFILL_GEMINI_MODELS = ['gemini-3.5-flash-lite'] as const;
+const NO_PREFILL_GEMINI_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-4-argon',
+] as const;
 
 export function rejectsModelTurnPrefill(model?: string): boolean {
   if (model == null || model === '') {
