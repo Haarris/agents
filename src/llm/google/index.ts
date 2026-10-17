@@ -19,14 +19,12 @@ import type { GoogleClientOptions, GoogleThinkingConfig } from '@/types';
 import {
   convertResponseContentToChatGenerationChunk,
   convertBaseMessagesToContent,
+  isGemini3PlusModel,
   dropUnsupportedModelTurnPrefill,
   mapGenerateContentResultToChatResult,
 } from './utils/common';
 import { smoothGenerationChunks } from '@/llm/stream/chunkAdapters';
 import { resolveStreamDelay } from '@/llm/stream/smoother';
-
-/** `gemini-3`, `gemini-3.8-flash`, `gemini-4-argon`, and any later major version. */
-const GEMINI_3_PLUS_PATTERN = /^gemini-(?:[3-9]|[1-9]\d+)(?:[.-]|$)/;
 
 type GoogleToolConfigWithServerSideInvocations = ToolConfig & {
   includeServerSideToolInvocations?: boolean;
@@ -55,7 +53,7 @@ export class CustomChatGoogleGenerativeAI extends ChatGoogleGenerativeAI {
       this.model.startsWith('gemini-2') ||
       (this.model.startsWith('gemma-3-') &&
         !this.model.startsWith('gemma-3-1b')) ||
-      GEMINI_3_PLUS_PATTERN.test(this.model)
+      isGemini3PlusModel(this.model)
     );
   }
 

@@ -104,6 +104,15 @@ function createGoogleFunctionResponsePart({
  */
 export const iife = <T>(fn: () => T): T => fn();
 
+/** `gemini-3`, `gemini-3.8-flash`, `gemini-4-argon`, and any later major version. */
+const GEMINI_3_PLUS_PATTERN = /^gemini-(?:[3-9]|[1-9]\d+)(?:[.-]|$)/;
+
+/** Whether `model` (optionally `models/` or provider prefixed) is Gemini 3 or later. */
+export function isGemini3PlusModel(model?: string): boolean {
+  const modelId = model?.toLowerCase().split('/').pop() ?? '';
+  return GEMINI_3_PLUS_PATTERN.test(modelId);
+}
+
 export function getMessageAuthor(message: BaseMessage): string {
   const type = message._getType();
   if (ChatMessage.isInstance(message)) {
@@ -540,7 +549,7 @@ export function convertMessageContentToParts(
             return signature;
           }
         }
-        if (model?.includes('gemini-3') === true) {
+        if (isGemini3PlusModel(model)) {
           return DUMMY_SIGNATURE;
         }
         return '';
