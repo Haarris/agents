@@ -133,6 +133,7 @@ import {
   TOOL_REPLAY_CONFIGS_KEY,
   rebindToolBatchReplayPayload,
   restoreToolReplayConfigs,
+  getPublicToolInterruptPayload,
 } from '@/tools/toolBatchReplay';
 import {
   executeHooks,
@@ -458,6 +459,7 @@ function getSubagentDefinitionId(
       instructions: agent.instructions,
       additionalInstructions: agent.additional_instructions,
       maxContextTokens: agent.maxContextTokens,
+      discoveredTools: [...new Set(agent.discoveredTools ?? [])].sort(),
       toolDefinitions: agent.toolDefinitions,
       toolRegistry: Object.fromEntries(
         Array.from(agent.toolRegistry ?? [], ([key, definition]) => [
@@ -2112,6 +2114,12 @@ export class SubagentExecutor {
             pendingInterruptIds: [...new Set(activeRun.pendingInterrupts.flatMap(
               (pending) => pending.id == null ? [] : [pending.id]
             ))],
+            pendingInterrupts: activeRun.pendingInterrupts.flatMap((pending) =>
+              pending.id == null ? [] : [{
+                interruptId: pending.id,
+                payload: structuredClone(getPublicToolInterruptPayload(pending.value)),
+              }]
+            ),
           }),
         ...(descendant == null ? {} : { descendant }),
       });

@@ -11,9 +11,7 @@ import { FakeListChatModel } from '@langchain/core/utils/testing';
 import type { ToolRunnableConfig } from '@langchain/core/tools';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import type { Interrupt } from '@langchain/langgraph';
-import type { SubagentCheckpointReference } from '@/tools/subagent/SubagentReplay';
 import type * as t from '@/types';
-import { getSubagentResumeManifest } from '@/tools/subagent/SubagentReplay';
 import { getPublicToolInterruptPayload } from '@/tools/toolBatchReplay';
 import { isToolApprovalInterrupt } from '@/types/hitl';
 import { createFakeStreamingLLM } from '@/llm/fake';
@@ -334,33 +332,14 @@ async function start(run: Run<t.IState>) {
 }
 
 async function pendingMemberInterrupts(
-  checkpointer: MemorySaver
+  run: Run<t.IState>
 ): Promise<Interrupt[]> {
-  let reference: SubagentCheckpointReference | undefined;
-  for await (const parent of checkpointer.list(config)) {
-    const interrupted = parent.pendingWrites?.find(
-      ([, channel]) => channel === '__interrupt__'
-    )?.[2] as Interrupt | undefined;
-    const manifest = getSubagentResumeManifest(interrupted?.value);
-    reference = manifest?.executions[0].checkpoints.find(
-      (checkpoint) => checkpoint.checkpointNs === ''
-    );
-    if (reference != null) break;
-  }
-  if (reference == null) throw new Error('Missing child checkpoint');
-  const child = await checkpointer.getTuple({
-    configurable: {
-      thread_id: reference.threadId,
-      checkpoint_ns: reference.checkpointNs,
-      checkpoint_id: reference.checkpointId,
-    },
-  });
-  const pending =
-    child?.pendingWrites?.flatMap(([, channel, value]) =>
-      channel === '__interrupt__' ? [value as Interrupt] : []
-    ) ?? [];
-  expect(pending.map((interrupt) => interrupt.id)).toHaveLength(2);
-  return pending;
+  const pending = run.getInterrupt()?.pendingInterrupts;
+  expect(pending).toHaveLength(2);
+  return pending!.map(({ interruptId, payload }) => ({
+    id: interruptId,
+    value: payload,
+  }));
 }
 
 describe('graph subagent foreground HITL', () => {
@@ -421,7 +400,7 @@ describe('graph subagent foreground HITL', () => {
       expect(h.rightEffect).toHaveBeenCalledTimes(1);
       expect(h.leftExecute).not.toHaveBeenCalled();
       expect(h.rightExecute).not.toHaveBeenCalled();
-      const pending = await pendingMemberInterrupts(h.checkpointer);
+      const pending = await pendingMemberInterrupts(run);
       const decisions: Record<string, t.ToolApprovalDecision[]> = {};
       for (const entry of pending) {
         if (entry.id == null) throw new Error('Missing interrupt ID');
@@ -478,7 +457,7 @@ describe('graph subagent foreground HITL', () => {
       const h = harness(eventDriven);
       const run = await h.build();
       await start(run);
-      const pending = await pendingMemberInterrupts(h.checkpointer);
+      const pending = await pendingMemberInterrupts(run);
       const decisions: Record<string, t.ToolApprovalDecision[]> = {};
       for (const interrupt of pending) {
         if (interrupt.id == null) throw new Error('Missing interrupt ID');
@@ -522,7 +501,7 @@ describe('graph subagent foreground HITL', () => {
       const h = harness(eventDriven);
       const run = await h.build();
       await start(run);
-      const pending = await pendingMemberInterrupts(h.checkpointer);
+      const pending = await pendingMemberInterrupts(run);
       const decisions: Record<string, t.ToolApprovalDecision[]> = {};
       for (const entry of pending) {
         if (entry.id == null) throw new Error('Missing interrupt ID');
@@ -573,7 +552,7 @@ describe('graph subagent foreground HITL', () => {
     const h = harness(false, true);
     const run = await h.build();
     await start(run);
-    const pending = await pendingMemberInterrupts(h.checkpointer);
+    const pending = await pendingMemberInterrupts(run);
     const decisions = Object.fromEntries(
       pending.map((entry) => [entry.id!, [{ type: 'approve' }]])
     );
@@ -640,6 +619,7 @@ describe('graph subagent foreground HITL', () => {
   );
 
   test.each([
+    'discovered-tools',
     'prompt-kind',
     'topology',
     'instructions',
@@ -695,7 +675,12 @@ describe('graph subagent foreground HITL', () => {
         ...h.graph,
         agents: h.graph.agents.map((agent) => ({ ...agent })),
       };
-      if (change === 'prompt-kind') graph.edges = h.graph.edges.map((edge, index) => index === 1 ? { ...edge, prompt: 'Different static prompt' } : edge);
+      if (change === 'prompt-kind')
+        graph.edges = h.graph.edges.map((edge, index) =>
+          index === 1 ? { ...edge, prompt: 'Different static prompt' } : edge
+        );
+      if (change === 'discovered-tools')
+        graph.agents[1].discoveredTools = ['new-deferred-tool'];
       if (change === 'topology')
         graph.edges = [
           { from: 'entry', to: 'right', edgeType: 'direct' },
@@ -1257,6 +1242,70 @@ describe('graph subagent foreground HITL', () => {
       );
       expect(original.get(Constants.EXECUTE_CODE)?.files).toHaveLength(1);
       expect(refreshed.get(Constants.EXECUTE_CODE)?.files).toHaveLength(1);
+    }
+  );
+
+  test('normalizes discovered-tool declarations without exposing parent discovery state', async () => {
+    const h = harness();
+    h.graph.agents[1].discoveredTools = ['first', 'second', 'first'];
+    const run = await h.build();
+    await start(run);
+    const definition = {
+      ...h.graph,
+      agents: h.graph.agents.map((agent) => ({ ...agent })),
+    };
+    definition.agents[1].discoveredTools = ['second', 'first'];
+    const rebuilt = await h.build(definition);
+    await rebuilt.resume([{ type: 'approve' }], config);
+    await rebuilt.resume([{ type: 'approve' }], config);
+    expect(rebuilt.getInterrupt()).toBeUndefined();
+    expect(h.leftExecute).toHaveBeenCalledTimes(1);
+    expect(h.rightExecute).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([false, true])(
+    'public pending proposals are detached and survive partial rebuilt resume, eventDriven=%s',
+    async (eventDriven) => {
+      const h = harness(eventDriven);
+      const run = await h.build();
+      await start(run);
+      const pending = run.getInterrupt()?.pendingInterrupts;
+      expect(pending).toHaveLength(2);
+      const decisions: Record<string, t.ToolApprovalDecision[]> = {};
+      for (const item of pending ?? []) {
+        if (!isToolApprovalInterrupt(item.payload))
+          throw new Error('Missing public approval');
+        expect(item.payload.action_requests[0].tool_call_id).toBe(
+          'shared-member-call'
+        );
+        expect(item.payload.review_configs[0].allowed_decisions).toContain(
+          'approve'
+        );
+        decisions[item.interruptId] = [{ type: 'approve' }];
+        item.payload.action_requests[0].arguments.value = 'mutated';
+      }
+      expect(JSON.stringify(run.getInterrupt())).not.toMatch(
+        /__librechat|approvalReplays|checkpoints/
+      );
+      const first = pending?.[0];
+      if (first == null) throw new Error('Missing first pending approval');
+      const rebuilt = await h.build();
+      await rebuilt.resume(
+        { [first.interruptId]: decisions[first.interruptId] },
+        config
+      );
+      const remaining = rebuilt.getInterrupt()?.pendingInterrupts;
+      expect(remaining).toHaveLength(1);
+      expect(remaining?.[0].interruptId).not.toBe(first.interruptId);
+      const last = remaining?.[0];
+      if (last == null) throw new Error('Missing last pending approval');
+      const again = await h.build();
+      await again.resume({ [last.interruptId]: [{ type: 'approve' }] }, config);
+      expect(again.getInterrupt()).toBeUndefined();
+      expect(h.leftExecute.mock.calls[0][0]).toEqual({ value: 'original' });
+      expect(h.rightExecute.mock.calls[0][0]).toEqual({ value: 'original' });
+      expect(h.leftExecute).toHaveBeenCalledTimes(1);
+      expect(h.rightExecute).toHaveBeenCalledTimes(1);
     }
   );
 });

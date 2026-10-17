@@ -1596,6 +1596,9 @@ export class Run<_T extends t.BaseGraphState> {
                 interruptId: first.id ?? '',
                 threadId,
                 payload: cloneToolApprovalInterruptPayload(first.value),
+                pendingInterrupts: interrupts.map((pending) => ({
+                  interruptId: pending.id ?? '', payload: pending.value,
+                })),
               };
             }
           }
@@ -1975,11 +1978,33 @@ export class Run<_T extends t.BaseGraphState> {
     if (this._interrupt == null) {
       return undefined;
     }
+    const pendingInterrupts = new Map<
+      string, Pick<t.RunInterruptResult<unknown>, 'interruptId' | 'payload'>
+    >();
+    for (const pending of this._interrupt.pendingInterrupts ?? [this._interrupt]) {
+      pendingInterrupts.set(pending.interruptId, pending);
+    }
+    const replayPayload = stripRunStepResumeState(this._interrupt.payload);
+    const manifest =
+      requireValidSubagentResumeManifest(replayPayload) ??
+      requireValidSubagentResumeManifest(stripToolBatchReplayState(replayPayload));
+    const executions = [...(manifest?.executions ?? [])];
+    while (executions.length > 0) {
+      const execution = executions.pop()!;
+      for (const pending of execution.pendingInterrupts ?? []) {
+        pendingInterrupts.set(pending.interruptId, pending);
+      }
+      executions.push(...(execution.descendant?.executions ?? []));
+    }
     return {
       ...this._interrupt,
       payload: cloneToolApprovalInterruptPayload(
         getPublicToolInterruptPayload(this._interrupt.payload)
       ),
+      pendingInterrupts: [...pendingInterrupts.values()].map((pending) => ({
+        interruptId: pending.interruptId,
+        payload: structuredClone(getPublicToolInterruptPayload(pending.payload)),
+      })),
     } as t.RunInterruptResult<TPayload>;
   }
 
